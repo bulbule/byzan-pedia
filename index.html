@@ -84,9 +84,24 @@
   .empty{background:rgba(255,255,255,.95);border-radius:14px;padding:22px;text-align:center;color:var(--muted)}
 
   footer{color:#a9cbb9;text-align:center;font-size:.78rem;padding:10px 0 30px;line-height:1.6}
+
+  .detail-overlay{position:fixed;inset:0;background:rgba(0,20,12,.72);display:none;align-items:center;justify-content:center;padding:18px;z-index:9999}
+  .detail-overlay.open{display:flex}
+  .detail-panel{width:min(760px,100%);max-height:85vh;overflow:auto;background:#fff;border-radius:16px;padding:22px;color:var(--ink);box-shadow:0 20px 70px rgba(0,0,0,.35)}
+  .detail-head{display:flex;align-items:start;justify-content:space-between;gap:12px}
+  .detail-close{border:0;border-radius:9px;padding:8px 12px;background:var(--g100);color:var(--g800);font-weight:700;cursor:pointer}
+  .detail-content{white-space:normal;line-height:1.7;overflow-wrap:anywhere}
+  .detail-content .arabic{font-size:1.35rem;line-height:2;text-align:right;direction:rtl;padding:12px;background:#f4faf6;border-radius:10px}
+  .detail-loading{color:var(--muted)}
 </style>
 </head>
 <body>
+<div class="detail-overlay" id="detail-overlay" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+  <div class="detail-panel">
+    <div class="detail-head"><div><div class="badge">Byzan Pedia · Detail sumber</div><h2 id="detail-title">Detail</h2></div><button class="detail-close" id="detail-close" type="button">Tutup ✕</button></div>
+    <div id="detail-content" class="detail-content"><p class="detail-loading">Memuat detail…</p></div>
+  </div>
+</div>
 <div class="wrap">
   <header class="top">
     <a class="brand" href="https://byzanedu.com" target="_blank" rel="noopener">
@@ -288,11 +303,15 @@ async function srcOpenLibrary(q){
 function normalizeRows(payload) {
   if (Array.isArray(payload)) return payload;
   if (!payload || typeof payload !== "object") return [];
-  for (const k of ["data","results","items","books","hadits","kitab","chapters"]) {
-    if (Array.isArray(payload[k])) return payload[k];
-  }
+  const candidates = [
+    payload.data, payload.results, payload.items, payload.books, payload.hadits,
+    payload.kitab, payload.chapters, payload.ayat, payload.rows,
+    payload.data?.items, payload.data?.results, payload.data?.items?.data,
+    payload.data?.hadits, payload.data?.kitab, payload.data?.results?.data
+  ];
+  for (const v of candidates) if (Array.isArray(v)) return v;
   if (payload.data && typeof payload.data === "object") {
-    for (const k of ["results","items","bab","chapters"]) if (Array.isArray(payload.data[k])) return payload.data[k];
+    for (const v of Object.values(payload.data)) if (Array.isArray(v)) return v;
   }
   return [];
 }
@@ -301,70 +320,88 @@ function pickText(obj, keys) {
   for (const key of keys) {
     const v = key.split(".").reduce((a,k) => a == null ? undefined : a[k], obj);
     if (typeof v === "string" && v.trim()) return v;
+    if (typeof v === "number") return String(v);
   }
   return "";
+}
+function firstValue(obj, keys) {
+  for (const key of keys) {
+    const v = key.split(".").reduce((a,k) => a == null ? undefined : a[k], obj);
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return "";
+}
+function toArrayText(v) {
+  if (Array.isArray(v)) return v.map(x => typeof x === "string" ? x : (x?.nama || x?.name || x?.judul || "")).filter(Boolean);
+  if (typeof v === "string" && v.trim()) return [v.trim()];
+  return [];
 }
 
 async function kitabFetch(path, query = {}) {
   const key = $("k-kitab").value.trim();
-  if (!key) throw new Error("isi API key 21 Kitab di Pengaturan");
+  if (!key) throw new Error("Isi API key Ahmad Sanusi di Pengaturan.");
   const u = new URL("https://api.ahmadsanusi.com" + path);
-  Object.entries(query).forEach(([k,v]) => { if (v !== undefined && v !== "") u.searchParams.set(k, v); });
-  return getJSON(u.href, {headers:{"X-API-Key":key}});
+  Object.entries(query).forEach(([k,v]) => { if (v !== undefined && v !== null && v !== "") u.searchParams.set(k, v); });
+  const response = await getJSON(u.href, {headers:{"X-API-Key":key}});
+  if (response?.detail && !response?.data) throw new Error(typeof response.detail === "string" ? response.detail : "API menolak permintaan");
+  return response;
+}
+
+function mapKitabRow(b) {
+  const slug = pickText(b, ["slug","kode","id_slug"]);
+  const id = firstValue(b, ["id","kitab_id"]);
+  const title = pickText(b, ["nama","nama_kitab","judul","title","name"]);
+  const author = pickText(b, ["pengarang","nama_pengarang","author","penulis","muallif"]);
+  const category = pickText(b, ["kategori","category","jenis"]);
+  const desc = pickText(b, ["deskripsi","description","keterangan","ringkasan","deskripsi_indonesia"]);
+  return {
+    source:"Ahmad Sanusi API · Kitab Kuning", kind:"kitab", title:title || "Kitab",
+    authors:author ? [author] : [], year:pickText(b,["tahun","year"]),
+    abstract:desc || [category ? "Kategori: " + category : "", author ? "Pengarang: " + author : ""].filter(Boolean).join(". "),
+    pdf:null, read:null, url:"https://api.ahmadsanusi.com/docs",
+    extra:category, detailType:"kitab", detailKey:slug || (id != null ? String(id) : "")
+  };
+}
+function mapHadithRow(h) {
+  const kitabSlug = pickText(h, ["kitab_slug","slug_kitab","book_slug","kitab.slug","slug"]);
+  const kitabName = pickText(h, ["nama_kitab","kitab_nama","kitab.name","kitab","book_name","collection"]);
+  const number = firstValue(h, ["nomor","nomor_hadits","hadits_no","number","no","id"]);
+  const arabic = pickText(h, ["teks_arab","arab","arabic","matn_arab","matan_arab","matan"]);
+  const indonesian = pickText(h, ["terjemahan","teks_indonesia","translation","text_id","isi","text","content","matn_indonesia"]);
+  const title = (kitabName ? kitabName + (number ? " · Hadis " + number : "") : "Hadis" + (number ? " " + number : ""));
+  return {
+    source:"Ahmad Sanusi API · Hadis", kind:"hadith", title,
+    authors:toArrayText(firstValue(h, ["perawi","rawi","perawi_nama","narrator"])),
+    abstract:[arabic,indonesian].filter(Boolean).join("\n\n"),
+    pdf:null, read:null, url:"https://api.ahmadsanusi.com/docs",
+    extra:pickText(h,["bab","nama_bab","chapter","referensi","reference"]),
+    detailType:"hadith", detailKey:kitabSlug, detailNumber:number, detailArabic:arabic, detailText:indonesian,
+    raw:h
+  };
 }
 
 async function srcKitab(q){
-  const key = $("k-kitab").value.trim();
-  if (!key) throw new Error("isi API key 21 Kitab di Pengaturan");
   const query = q.trim();
-  const tasks = [
-    kitabFetch("/v1/kitab", {q:query}),
-    // Endpoint ini mencari hadis di terjemahan Indonesia; hasil dapat kosong bila kata kunci Arab.
-    query.length >= 3 ? kitabFetch("/v1/hadits/search", {q:query, page:1, limit:MAX_PER_SOURCE}) : Promise.resolve(null)
+  const jobs = [
+    ["kitab", () => kitabFetch("/v1/kitab", {q:query})],
+    ["hadith", () => query.length >= 3 ? kitabFetch("/v1/hadits/search", {q:query, page:1, limit:MAX_PER_SOURCE}) : Promise.resolve(null)]
   ];
-  const responses = await Promise.allSettled(tasks);
-  const out = [];
-  const bookResponse = responses[0];
-  if (bookResponse.status === "fulfilled") {
-    const rows = normalizeRows(bookResponse.value);
-    rows.forEach(b => {
-      const title = pickText(b, ["nama","nama_kitab","title","judul","name"]);
-      const author = pickText(b, ["pengarang","author","penulis","muallif"]);
-      const slug = pickText(b, ["slug","id"]);
-      if (!title) return;
-      out.push({
-        source:"API 21 Kitab · Kitab Islam", kind:"kitab", title,
-        authors:author ? [author] : [],
-        year:pickText(b, ["tahun","year"]),
-        abstract:pickText(b, ["deskripsi","description","keterangan","deskripsi_indonesia"]),
-        pdf:null, read:null,
-        url:slug ? "https://ahmadsanusi.com/islami/kitab" : "https://ahmadsanusi.com/islami/kitab",
-        extra:pickText(b, ["kategori","category"])
-      });
+  const responses = await Promise.allSettled(jobs.map(j => j[1]()));
+  const out = [], errors = [];
+  if (responses[0].status === "fulfilled") {
+    const rows = normalizeRows(responses[0].value);
+    rows.forEach(b => { const item = mapKitabRow(b); if (item.title !== "Kitab") out.push(item); });
+  } else errors.push("Pencarian kitab: " + (responses[0].reason?.message || "gagal"));
+  if (responses[1].status === "fulfilled" && responses[1].value) {
+    normalizeRows(responses[1].value).forEach(h => {
+      const item = mapHadithRow(h);
+      if (item.abstract || (item.title && item.title !== "Hadis")) out.push(item);
     });
-  }
-  const hadithResponse = responses[1];
-  if (hadithResponse?.status === "fulfilled" && hadithResponse.value) {
-    normalizeRows(hadithResponse.value).forEach(h => {
-      const text = pickText(h, ["teks_indonesia","terjemahan","text","isi","matn","hadits","content","teks"]);
-      const arabic = pickText(h, ["teks_arab","arab","arabic","matn_arab"]);
-      const title = pickText(h, ["judul","title","nama_kitab","kitab","book_name"]) || "Hadis terkait: " + query;
-      const ref = pickText(h, ["nomor","number","hadits_no","no","referensi","reference"]);
-      const author = pickText(h, ["perawi","rawi","author"]);
-      const content = [arabic, text].filter(Boolean).join("\n");
-      if (!content && !title) return;
-      out.push({
-        source:"API 21 Kitab · Pencarian hadis", kind:"hadith", title,
-        authors:author ? [author] : [],
-        abstract:content || "Hasil pencarian hadis. Buka sumber API untuk detail.",
-        pdf:null, read:null, url:"https://api.ahmadsanusi.com/redoc",
-        extra:ref ? "Referensi: " + ref : ""
-      });
-    });
-  }
-  // Bila respons API memiliki struktur yang berbeda, beri status error yang jelas, bukan hasil palsu.
-  if (!out.length && responses.every(r => r.status === "rejected")) {
-    throw new Error(responses.map(r => r.reason?.message || "API error").join("; "));
+  } else if (responses[1].status === "rejected") errors.push("Pencarian hadis: " + (responses[1].reason?.message || "gagal"));
+  if (!out.length && errors.length) throw new Error(errors.join(" · "));
+  if (!out.length) {
+    const notes = responses.map((r,i) => r.status === "fulfilled" ? jobs[i][0]+": respons berhasil, tetapi format hasil belum dikenali" : jobs[i][0]+": "+(r.reason?.message || "gagal"));
+    throw new Error(notes.join(" · "));
   }
   return out.slice(0, MAX_PER_SOURCE * 2);
 }
@@ -377,8 +414,8 @@ function card(it, terms){
   const btns = [];
   if (pdf) btns.push(`<a class="btn" href="${esc(pdf)}" target="_blank" rel="noopener">📄 Buka PDF</a>`);
   if (read) btns.push(`<a class="btn" href="${esc(read)}" target="_blank" rel="noopener">📖 Baca online</a>`);
-  if (url) btns.push(`<a class="btn alt" href="${esc(url)}" target="_blank" rel="noopener">Halaman sumber</a>`);
-  if (!pdf && !read && !btns.length) btns.push(`<span class="btn off">Tautan baca tidak tersedia</span>`);
+  if (it.detailType) btns.push(`<button class="btn" type="button" data-detail="${esc(it.detailType)}" data-index="${it._index}">🔎 Lihat detail</button>`);
+  if (url) btns.push(`<a class="btn alt" href="${esc(url)}" target="_blank" rel="noopener">Dokumentasi API</a>`);
   const extra = it.extra ? `<div class="authors">ℹ️ ${esc(it.extra)}</div>` : "";
   const kindLabel = ({book:"Buku",kitab:"Kitab Islam",hadith:"Hadis",article:"Jurnal/Riset"})[it.kind] || "Referensi";
   return `<article class="card">
@@ -390,6 +427,49 @@ function card(it, terms){
     <div class="btns">${btns.join("")}</div>
   </article>`;
 }
+
+async function openDetail(item) {
+  const overlay = $("detail-overlay"), content = $("detail-content"), title = $("detail-title");
+  overlay.classList.add("open");
+  title.textContent = item.title || "Detail";
+  content.innerHTML = `<p class="detail-loading">Memuat detail dari API…</p>`;
+  try {
+    let payload = null;
+    if (item.detailType === "kitab" && item.detailKey) {
+      payload = await kitabFetch("/v1/kitab/" + encodeURIComponent(item.detailKey), {page:1,limit:100});
+    } else if (item.detailType === "hadith" && item.detailKey && item.detailNumber) {
+      payload = await kitabFetch("/v1/hadits/" + encodeURIComponent(item.detailKey) + "/" + encodeURIComponent(item.detailNumber));
+    } else {
+      payload = item.raw || {data:{arab: item.detailArabic, terjemahan:item.detailText}};
+    }
+    const data = payload?.data ?? payload;
+    const pretty = (obj, depth=0) => {
+      if (obj == null || depth > 4) return "";
+      if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") return `<p>${esc(String(obj))}</p>`;
+      if (Array.isArray(obj)) return obj.map(x => pretty(x,depth+1)).join("");
+      if (typeof obj === "object") return Object.entries(obj).map(([k,v]) => {
+        if (v == null || typeof v === "object" && !Array.isArray(v) && depth >= 3) return "";
+        const label = k.replace(/_/g," ").replace(/\b\w/g, c => c.toUpperCase());
+        const val = typeof v === "string" && /arab|arabi|matan/i.test(k) ? `<div class="arabic">${esc(v)}</div>` : pretty(v,depth+1);
+        return `<section><strong>${esc(label)}</strong>${val}</section>`;
+      }).join("");
+      return "";
+    };
+    content.innerHTML = pretty(data) || `<p>Detail tidak tersedia pada respons API. Coba lihat dokumentasi API.</p><p><a href="https://api.ahmadsanusi.com/docs" target="_blank" rel="noopener">Buka dokumentasi API</a></p>`;
+  } catch (err) {
+    const fallback = [item.detailArabic ? `<div class="arabic">${esc(item.detailArabic)}</div>` : "", item.detailText ? `<p>${esc(item.detailText)}</p>` : ""].join("");
+    content.innerHTML = `${fallback}<p>Detail tambahan gagal dimuat: ${esc(err.message || "kesalahan API")}.</p><p><a href="https://api.ahmadsanusi.com/docs" target="_blank" rel="noopener">Buka dokumentasi API</a></p>`;
+  }
+}
+$("detail-close").addEventListener("click", () => $("detail-overlay").classList.remove("open"));
+$("detail-overlay").addEventListener("click", e => { if (e.target === $("detail-overlay")) $("detail-overlay").classList.remove("open"); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("detail-overlay").classList.remove("open"); });
+$("results").addEventListener("click", e => {
+  const btn = e.target.closest("[data-detail]");
+  if (!btn) return;
+  const item = window.__byzanItems?.[Number(btn.dataset.index)];
+  if (item) openDetail(item);
+});
 
 function setStatus(list){
   $("status").innerHTML = list.map(s => `<span class="st ${s.err ? "err" : "ok"}">${esc(s.name)}: ${esc(s.msg)}</span>`).join("");
@@ -438,6 +518,8 @@ async function search(e){
   items = items.map((it, i) => ({it, i})).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map(x => x.it);
 
   $("summary").textContent = items.length ? `${items.length} hasil untuk “${q}”` : `Tidak ada hasil untuk “${q}”.`;
+  window.__byzanItems = items;
+  items.forEach((it, i) => it._index = i);
   $("results").innerHTML = items.length ? items.map(it => card(it, terms)).join("")
     : `<div class="empty">Belum ada hasil. Coba kata kunci lebih umum, pastikan API key sudah diisi, atau nonaktifkan filter baca/PDF.</div>`;
   $("go").disabled = false; $("go").textContent = "Cari";
