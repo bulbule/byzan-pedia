@@ -127,7 +127,8 @@
       </svg>
     </span>
     <h1>Byzan Pedia</h1>
-    <p>Cari buku, jurnal ilmiah, dan karya tulis. Ketik satu atau beberapa kata kunci, lalu baca langsung lewat tautan PDF-nya. Gratis, tanpa AI.</p>
+    <p>Cari buku, kitab Islam, hadis, dan jurnal ilmiah dari beberapa sumber. Ketik judul, penulis, atau kata kunci untuk menemukan metadata dan cuplikan yang tersedia.</p>
+    <p class="small-note">Catatan: hasil API bergantung pada data sumber, kuota, dan dukungan akses dari penyedia.</p>
 
     <form class="search" id="f" role="search">
       <input id="q" type="search" placeholder="Contoh: literasi digital pendidikan dasar" autocomplete="off" required>
@@ -135,22 +136,23 @@
     </form>
 
     <div class="opts">
-      <label class="chip"><input type="checkbox" id="s-local" checked> Koleksi Byzan (contoh)</label>
-      <label class="chip"><input type="checkbox" id="s-openalex" checked> OpenAlex</label>
-      <label class="chip"><input type="checkbox" id="s-doaj" checked> DOAJ</label>
-      <label class="chip"><input type="checkbox" id="s-ol" checked> Open Library (buku)</label>
-      <label class="chip"><input type="checkbox" id="s-core"> CORE (perlu API key)</label>
-      <label class="chip"><input type="checkbox" id="pdfonly"> Hanya yang ada PDF / bisa dibaca</label>
+      <label class="chip"><input type="checkbox" id="s-books" checked> Google Books</label>
+      <label class="chip"><input type="checkbox" id="s-kitab" checked> Kitab Islam &amp; hadis</label>
+      <label class="chip"><input type="checkbox" id="s-openalex" checked> Jurnal / riset OpenAlex</label>
+      <label class="chip"><input type="checkbox" id="s-ol" checked> Open Library (cadangan)</label>
+      <label class="chip"><input type="checkbox" id="pdfonly"> Hanya yang bisa dibaca / PDF</label>
     </div>
 
     <details class="settings">
       <summary>Pengaturan API key (opsional)</summary>
       <div class="box">
-        <label>CORE API key — gratis di <a href="https://core.ac.uk/services/api" target="_blank" rel="noopener">core.ac.uk/services/api</a>
-          <input id="k-core" type="password" placeholder="tempel API key CORE" autocomplete="off"></label>
-        <label>OpenAlex API key — gratis di <a href="https://openalex.org/settings/api" target="_blank" rel="noopener">openalex.org/settings/api</a>
+        <label>API 21 Kitab / Ahmad Sanusi
+          <input id="k-kitab" type="password" placeholder="tempel API key dengan prefix ask_..." autocomplete="off"></label>
+        <label>Google Books API key
+          <input id="k-books" type="password" placeholder="tempel API key Google Books" autocomplete="off"></label>
+        <label>OpenAlex API key
           <input id="k-oa" type="password" placeholder="tempel API key OpenAlex" autocomplete="off"></label>
-        <span>Prototipe ini memanggil API langsung dari browser, jadi key tersimpan di browser Anda saja. Untuk situs sungguhan, pindahkan key ke server.</span>
+        <span>Key disimpan di browser ini untuk prototipe. GitHub Pages adalah situs publik: siapa pun bisa melihat key yang dipakai oleh browser. Untuk produksi, gunakan backend/proxy dan batasi key sesuai penyedia.</span>
       </div>
     </details>
   </section>
@@ -160,8 +162,8 @@
   <main id="results"></main>
 
   <footer>
-    Sumber data: OpenAlex, DOAJ, Open Library / Internet Archive, CORE — semuanya open access.<br>
-    Prototipe Byzan Pedia · koleksi "Contoh" hanyalah data demo, bukan karya sungguhan.
+    Sumber data: Google Books, API Kitab Kuning Ahmad Sanusi, OpenAlex, Open Library / Internet Archive.<br>
+    Ketersediaan baca penuh bergantung pada akses dan lisensi masing-masing sumber.
   </footer>
 </div>
 
@@ -216,53 +218,53 @@ function makeSnippet(text, terms){
 }
 
 /* ========= Sumber data ========= */
+function abstractFromOpenAlex(inv) {
+  if (!inv) return "";
+  const arr = [];
+  for (const [word, pos] of Object.entries(inv)) pos.forEach(p => arr[p] = word);
+  return arr.join(" ");
+}
+
 async function srcOpenAlex(q){
   const key = $("k-oa").value.trim();
   const url = "https://api.openalex.org/works?search=" + encodeURIComponent(q) +
-    "&filter=is_oa:true&per-page=" + MAX_PER_SOURCE +
+    "&per-page=" + MAX_PER_SOURCE +
     "&select=id,title,authorships,publication_year,best_oa_location,primary_location,abstract_inverted_index,doi" +
     (key ? "&api_key=" + encodeURIComponent(key) : "");
   const d = await getJSON(url);
   return (d.results || []).map(w => {
-    let abs = "";
-    const inv = w.abstract_inverted_index;
-    if (inv) {
-      const arr = [];
-      for (const [word, pos] of Object.entries(inv)) pos.forEach(p => arr[p] = word);
-      abs = arr.join(" ");
-    }
     const loc = w.best_oa_location || w.primary_location || {};
+    const abs = abstractFromOpenAlex(w.abstract_inverted_index);
     return {
-      source:"OpenAlex", title:w.title, year:w.publication_year,
+      source:"OpenAlex · Jurnal/Riset", kind:"article", title:w.title, year:w.publication_year,
       authors:(w.authorships || []).slice(0, 6).map(a => a.author?.display_name).filter(Boolean),
-      abstract:abs, pdf:loc.pdf_url || null, url:loc.landing_page_url || w.doi || w.id
+      abstract:abs, pdf:loc.pdf_url || null, url:loc.landing_page_url || w.doi || w.id,
+      read:loc.pdf_url || null
     };
   });
 }
 
-async function srcCore(q){
-  const key = $("k-core").value.trim();
-  if (!key) throw new Error("isi API key CORE di Pengaturan");
-  const d = await getJSON("https://api.core.ac.uk/v3/search/works?limit=" + MAX_PER_SOURCE + "&q=" + encodeURIComponent(q),
-    {headers:{Authorization:"Bearer " + key}});
-  return (d.results || []).map(w => ({
-    source:"CORE", title:w.title, year:w.yearPublished,
-    authors:(w.authors || []).slice(0, 6).map(a => a.name).filter(Boolean),
-    abstract:w.abstract || "", pdf:w.downloadUrl || null,
-    url:(w.links || []).find(l => l.type === "display")?.url || w.downloadUrl
-  }));
-}
-
-async function srcDoaj(q){
-  const d = await getJSON("https://doaj.org/api/search/articles/" + encodeURIComponent(q) + "?pageSize=" + MAX_PER_SOURCE);
-  return (d.results || []).map(r => {
-    const b = r.bibjson || {};
-    const links = b.link || [];
-    const pdfLink = links.find(l => /pdf/i.test(l.content_type || "") || /\.pdf($|\?)/i.test(l.url || ""));
+async function srcGoogleBooks(q){
+  const key = $("k-books").value.trim();
+  const url = "https://www.googleapis.com/books/v1/volumes?q=" + encodeURIComponent(q) +
+    "&maxResults=" + MAX_PER_SOURCE + "&printType=books" +
+    "&projection=full" + (key ? "&key=" + encodeURIComponent(key) : "");
+  const d = await getJSON(url);
+  return (d.items || []).map(item => {
+    const v = item.volumeInfo || {};
+    const access = item.accessInfo || {};
+    const links = access.pdf || {};
+    const view = access.webReaderLink || v.infoLink || item.selfLink;
+    const desc = stripTags(v.description || "");
     return {
-      source:"DOAJ" + (b.journal?.title ? " · " + b.journal.title : ""), title:b.title, year:b.year,
-      authors:(b.author || []).slice(0, 6).map(a => a.name).filter(Boolean),
-      abstract:b.abstract || "", pdf:pdfLink?.url || null, url:links[0]?.url
+      source:"Google Books · Buku", kind:"book", title:v.title,
+      year:(v.publishedDate || "").slice(0,4),
+      authors:(v.authors || []).slice(0,6),
+      abstract:desc, pdf:(links.isAvailable && links.downloadLink) ? links.downloadLink : null,
+      read:(access.viewability === "ALL_PAGES" && view) ? view : null,
+      url:view || v.infoLink,
+      extra:[v.publisher, v.industryIdentifiers?.map(x => x.identifier).join(", ")].filter(Boolean).join(" · "),
+      access:access.viewability || "UNKNOWN"
     };
   });
 }
@@ -272,20 +274,99 @@ async function srcOpenLibrary(q){
     "&limit=" + MAX_PER_SOURCE + "&fields=key,title,author_name,first_publish_year,ia,has_fulltext,public_scan_b");
   return (d.docs || []).map(b => {
     const ia = (b.ia || [])[0];
+    const readable = !!(ia && (b.public_scan_b || b.has_fulltext));
     return {
-      source:"Open Library (buku)", title:b.title, year:b.first_publish_year, authors:(b.author_name || []).slice(0, 6),
+      source:"Open Library · Katalog buku", kind:"book", title:b.title,
+      year:b.first_publish_year, authors:(b.author_name || []).slice(0,6),
       abstract:"", pdf:null,
-      read:(ia && (b.public_scan_b || b.has_fulltext)) ? "https://archive.org/details/" + ia : null,
+      read:readable ? "https://archive.org/details/" + ia : null,
       url:"https://openlibrary.org" + b.key
     };
   });
 }
 
-function srcLocal(q, terms){
-  return LOCAL_ITEMS.filter(it => {
-    const hay = (it.title + " " + it.abstract + " " + it.authors.join(" ")).toLowerCase();
-    return terms.some(t => hay.includes(t));
-  }).map(it => ({...it, source:"Koleksi Byzan", local:true}));
+function normalizeRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const k of ["data","results","items","books","hadits","kitab","chapters"]) {
+    if (Array.isArray(payload[k])) return payload[k];
+  }
+  if (payload.data && typeof payload.data === "object") {
+    for (const k of ["results","items","bab","chapters"]) if (Array.isArray(payload.data[k])) return payload.data[k];
+  }
+  return [];
+}
+
+function pickText(obj, keys) {
+  for (const key of keys) {
+    const v = key.split(".").reduce((a,k) => a == null ? undefined : a[k], obj);
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return "";
+}
+
+async function kitabFetch(path, query = {}) {
+  const key = $("k-kitab").value.trim();
+  if (!key) throw new Error("isi API key 21 Kitab di Pengaturan");
+  const u = new URL("https://api.ahmadsanusi.com" + path);
+  Object.entries(query).forEach(([k,v]) => { if (v !== undefined && v !== "") u.searchParams.set(k, v); });
+  return getJSON(u.href, {headers:{"X-API-Key":key}});
+}
+
+async function srcKitab(q){
+  const key = $("k-kitab").value.trim();
+  if (!key) throw new Error("isi API key 21 Kitab di Pengaturan");
+  const query = q.trim();
+  const tasks = [
+    kitabFetch("/v1/kitab", {q:query}),
+    // Endpoint ini mencari hadis di terjemahan Indonesia; hasil dapat kosong bila kata kunci Arab.
+    query.length >= 3 ? kitabFetch("/v1/hadits/search", {q:query, page:1, limit:MAX_PER_SOURCE}) : Promise.resolve(null)
+  ];
+  const responses = await Promise.allSettled(tasks);
+  const out = [];
+  const bookResponse = responses[0];
+  if (bookResponse.status === "fulfilled") {
+    const rows = normalizeRows(bookResponse.value);
+    rows.forEach(b => {
+      const title = pickText(b, ["nama","nama_kitab","title","judul","name"]);
+      const author = pickText(b, ["pengarang","author","penulis","muallif"]);
+      const slug = pickText(b, ["slug","id"]);
+      if (!title) return;
+      out.push({
+        source:"API 21 Kitab · Kitab Islam", kind:"kitab", title,
+        authors:author ? [author] : [],
+        year:pickText(b, ["tahun","year"]),
+        abstract:pickText(b, ["deskripsi","description","keterangan","deskripsi_indonesia"]),
+        pdf:null, read:null,
+        url:slug ? "https://ahmadsanusi.com/islami/kitab" : "https://ahmadsanusi.com/islami/kitab",
+        extra:pickText(b, ["kategori","category"])
+      });
+    });
+  }
+  const hadithResponse = responses[1];
+  if (hadithResponse?.status === "fulfilled" && hadithResponse.value) {
+    normalizeRows(hadithResponse.value).forEach(h => {
+      const text = pickText(h, ["teks_indonesia","terjemahan","text","isi","matn","hadits","content","teks"]);
+      const arabic = pickText(h, ["teks_arab","arab","arabic","matn_arab"]);
+      const title = pickText(h, ["judul","title","nama_kitab","kitab","book_name"]) || "Hadis terkait: " + query;
+      const ref = pickText(h, ["nomor","number","hadits_no","no","referensi","reference"]);
+      const author = pickText(h, ["perawi","rawi","author"]);
+      const content = [arabic, text].filter(Boolean).join("\n");
+      if (!content && !title) return;
+      out.push({
+        source:"API 21 Kitab · Pencarian hadis", kind:"hadith", title,
+        authors:author ? [author] : [],
+        abstract:content || "Hasil pencarian hadis. Buka sumber API untuk detail.",
+        pdf:null, read:null, url:"https://api.ahmadsanusi.com/redoc",
+        extra:ref ? "Referensi: " + ref : ""
+      });
+    });
+  }
+  // Bila respons API memiliki struktur yang berbeda, beri status error yang jelas, bukan hasil palsu.
+  if (!out.length && responses.every(r => r.status === "rejected")) {
+    throw new Error(responses.map(r => r.reason?.message || "API error").join("; "));
+  }
+  return out.slice(0, MAX_PER_SOURCE * 2);
 }
 
 /* ========= Tampilan ========= */
@@ -296,14 +377,16 @@ function card(it, terms){
   const btns = [];
   if (pdf) btns.push(`<a class="btn" href="${esc(pdf)}" target="_blank" rel="noopener">📄 Buka PDF</a>`);
   if (read) btns.push(`<a class="btn" href="${esc(read)}" target="_blank" rel="noopener">📖 Baca online</a>`);
-  if (url && url !== location.href + "#" && !it.local) btns.push(`<a class="btn alt" href="${esc(url)}" target="_blank" rel="noopener">Halaman sumber</a>`);
-  if (it.local) btns.push(`<span class="btn off">PDF unggahan penulis (contoh)</span>`);
-  if (!btns.length) btns.push(`<span class="btn off">PDF tidak tersedia</span>`);
+  if (url) btns.push(`<a class="btn alt" href="${esc(url)}" target="_blank" rel="noopener">Halaman sumber</a>`);
+  if (!pdf && !read && !btns.length) btns.push(`<span class="btn off">Tautan baca tidak tersedia</span>`);
+  const extra = it.extra ? `<div class="authors">ℹ️ ${esc(it.extra)}</div>` : "";
+  const kindLabel = ({book:"Buku",kitab:"Kitab Islam",hadith:"Hadis",article:"Jurnal/Riset"})[it.kind] || "Referensi";
   return `<article class="card">
-    <div class="meta"><span class="badge ${it.local ? "local" : ""}">${esc(it.source)}</span>${it.year ? `<span class="year">${esc(it.year)}</span>` : ""}</div>
+    <div class="meta"><span class="badge">${esc(kindLabel)} · ${esc(it.source)}</span>${it.year ? `<span class="year">${esc(it.year)}</span>` : ""}</div>
     <h3>${esc(it.title || "(tanpa judul)")}</h3>
     <div class="authors">✍️ ${esc(authors)}</div>
-    ${snip ? `<p class="snip">${snip}</p>` : `<p class="snip none">Tidak ada cuplikan teks untuk entri ini.</p>`}
+    ${extra}
+    ${snip ? `<p class="snip">${snip}</p>` : `<p class="snip none">Sumber tidak menyediakan cuplikan deskripsi/teks untuk entri ini.</p>`}
     <div class="btns">${btns.join("")}</div>
   </article>`;
 }
@@ -322,40 +405,58 @@ async function search(e){
   setStatus([{name:"Pencarian", msg:"sedang berjalan…"}]);
 
   const jobs = [];
-  if ($("s-local").checked) jobs.push(["Koleksi Byzan", async () => srcLocal(q, terms)]);
+  if ($("s-books").checked) jobs.push(["Google Books", () => srcGoogleBooks(q)]);
+  if ($("s-kitab").checked) jobs.push(["API 21 Kitab", () => srcKitab(q)]);
   if ($("s-openalex").checked) jobs.push(["OpenAlex", () => srcOpenAlex(q)]);
-  if ($("s-doaj").checked) jobs.push(["DOAJ", () => srcDoaj(q)]);
   if ($("s-ol").checked) jobs.push(["Open Library", () => srcOpenLibrary(q)]);
-  if ($("s-core").checked) jobs.push(["CORE", () => srcCore(q)]);
 
   const res = await Promise.allSettled(jobs.map(j => j[1]()));
   let items = [], st = [];
   res.forEach((r, i) => {
     const name = jobs[i][0];
-    if (r.status === "fulfilled") { items = items.concat(r.value); st.push({name, msg:r.value.length + " hasil"}); }
-    else st.push({name, msg:"gagal (" + (r.reason?.message || "error") + ")", err:true});
+    if (r.status === "fulfilled") {
+      items = items.concat(r.value);
+      st.push({name, msg:r.value.length + " hasil"});
+    } else {
+      st.push({name, msg:"gagal (" + (r.reason?.message || "error") + ")", err:true});
+    }
   });
   setStatus(st);
 
   if ($("pdfonly").checked) items = items.filter(it => safeUrl(it.pdf) || safeUrl(it.read));
   items = items.filter(it => it.title);
 
-  /* Prioritaskan: koleksi Byzan, lalu yang punya PDF, lalu sisanya */
-  const rank = it => (it.local ? 0 : (it.pdf ? 1 : (it.read ? 2 : 3)));
+  // Prioritaskan hasil yang cocok judulnya, lalu yang punya akses baca, lalu sumber lainnya.
+  const normalizedQ = q.toLowerCase();
+  const rank = it => {
+    const title = (it.title || "").toLowerCase();
+    const titleMatch = title.includes(normalizedQ) ? 0 : 1;
+    const readable = (safeUrl(it.pdf) || safeUrl(it.read)) ? 0 : 1;
+    const kindRank = ({book:0,kitab:1,hadith:2,article:3})[it.kind] ?? 4;
+    return titleMatch * 10 + readable * 3 + kindRank;
+  };
   items = items.map((it, i) => ({it, i})).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map(x => x.it);
 
-  $("summary").textContent = items.length ? `${items.length} hasil untuk “${q}”` : "";
+  $("summary").textContent = items.length ? `${items.length} hasil untuk “${q}”` : `Tidak ada hasil untuk “${q}”.`;
   $("results").innerHTML = items.length ? items.map(it => card(it, terms)).join("")
-    : `<div class="empty">Tidak ada hasil untuk “${esc(q)}”. Coba kata kunci lain, kurangi jumlah kata, atau matikan filter PDF.</div>`;
+    : `<div class="empty">Belum ada hasil. Coba kata kunci lebih umum, pastikan API key sudah diisi, atau nonaktifkan filter baca/PDF.</div>`;
   $("go").disabled = false; $("go").textContent = "Cari";
 }
 
-/* ========= Init ========= */
+const DEMO_KEYS = {
+  "k-kitab": "ask_gaQWdUMz7HThtPZnk0OaiKhioabseQcHqmlvEC6Ol3I",
+  "k-books": "AIzaSyAJq1ohtLjh6jxMTiqnRzmc-K4LqsWR9gY",
+  // The same OpenAlex key was supplied in the message; replace if this is not its actual key.
+  "k-oa": "AIzaSyAJq1ohtLjh6jxMTiqnRzmc-K4LqsWR9gY"
+};
+function initKey(id, storageKey){
+  $(id).value = store(storageKey) || DEMO_KEYS[id] || "";
+  $(id).addEventListener("change", () => store(storageKey, $(id).value.trim()));
+}
 $("f").addEventListener("submit", search);
-$("k-core").value = store("byzan_core_key"); $("k-oa").value = store("byzan_oa_key");
-$("k-core").addEventListener("change", () => store("byzan_core_key", $("k-core").value.trim()));
-$("k-oa").addEventListener("change", () => store("byzan_oa_key", $("k-oa").value.trim()));
-if ($("k-core").value) $("s-core").checked = true;
+initKey("k-kitab", "byzan_kitab_key");
+initKey("k-books", "byzan_google_books_key");
+initKey("k-oa", "byzan_oa_key");
 
 /* Pakai file logo asli jika ada di folder yang sama */
 document.querySelectorAll("[data-logo]").forEach(box => {
